@@ -1,0 +1,170 @@
+clearvars -except testData
+clc
+
+%FOR THIS CODE TO WORK, NEED TO DOWNLOAD ALL THE full.txt DOCUMENTS AND PUT
+%SAVE THEM TO COMPUTER, NAMED LIKE THE LINE BELLOW THIS ONE.
+tests=["tdhcs1.txt","tdhcs2.txt","tdhcs3.txt","tdhcs4.txt","tdhcs5.txt","tdhcs6.txt","tdhcs7.txt","tdhcs15.txt","tdhcs16.txt"];
+testnums=[1:7,15,16];
+
+%imports all the data from all the txt files into a 3-dimensional array.
+%columns and rows correspond to a single txt file, different pages (3rd index)are
+%different txt files.
+if ~exist('testData')
+    testData=zeros(2380000,27,length(tests));
+    for i=1:length(tests)
+        testData(:,:,i)=readmatrix(tests(i));
+        fprintf('read %f\n',i)
+    end
+else
+    fprintf('File data already stored\n')
+end
+
+
+
+%CALCULATING ALL AVERAGE RPMs, related data
+%===================================================================
+RPMs=zeros(length(tests),7);
+%RPMs is matrix of solutions related to RPMs. 
+%1st column is names - tdhcs___.
+%2nd column is av RPM of motor one. in this case, 0 or NaN since its not
+%spinning.
+%3rd column in av RPM of motor two.
+%Fourth column is desired RPM. (from testMatrixRaja)
+%5th column is error to desired RPM
+%6th column is measured RPM (From testMatrixRaja)
+%7th column is error to measured RPM
+%each row is a new test from 1-7,15,16
+RPMs(:,1)=testnums';
+for i=1:length(tests)
+   [RPMs(i,[2,3]),~]=getRPM(testData(:,:,i)); %gets average RPMs of all tests
+end
+%these next lines are just copying values from
+%TestMatrixRaja_SepEntry_II.xls, comparing to my averages, and displaying
+RPMs(:,4)=[1895,2493,2991,3490,3989,4487,4986,1496,1994]';
+RPMs(:,5)=RPMs(:,4)-RPMs(:,3);
+RPMs(:,6)=[1894,2484,3000,3477,4005,4463,4981,1510,2004]';
+RPMs(:,7)=RPMs(:,6)-RPMs(:,3);
+T=array2table(RPMs,'VariableNames',{'Name tdhcs__','m1 RPM', 'm2 RPM', 'desired RPM', 'to desired', 'measured RPM','to measured'})
+
+
+
+%CALCULATING AVERAGE FORCES & MOMENTS
+%make this a function accepting 1 or 2 for motor (eventually for 2-motor case)
+%==============================================================
+FsMsRPMs=zeros(length(tests),8);
+%columns are averages [test# F2x F2y F2z M2x M2y M2z m2RPM] (motor 1 is neglected, not rotating)
+%each row is a new test from 1-7, 15,16
+FsMsRPMs(:,1)=testnums';
+for i=1:length(tests)
+   FsMsRPMs(i,2:7)=getFsMs(testData(:,:,i)); %gets average forces and moments of motor2 for all tests
+end
+FsMsRPMs(:,8)=RPMs(:,3); %adds in average RPMs of motor 2 
+T2=array2table(FsMsRPMs, 'VariableNames',{'Name tdhcs__', 'F2x', 'F2y', 'F2z', 'M2x', 'M2y', 'M2z', 'm2RPM'})
+%ave from all 120s
+
+
+%FINDING ERRORS AND STANDARD DEVIATIONS
+%=================================================================
+%Strategy: 10s intervals with 5s overlap (10s=200000 measurements)
+%For each interval, for all 7 metric (3 forces 3 moments 1 RPM), calculate
+%its standard deviation and error to average
+%NOTE: I am very unsure of if the way I did the RPM comparison is correct.
+%I get an array of the number of measurements between detecting new blades,
+%convert that to RPMs, then compare to the average RPM from the whole test.
+winlen=10; %length of window (s)
+overlap=0.5; %overlap between windows
+win=winlen/0.00005; %length of window (number of measurements)
+avErrors=zeros(0);%3D array describing the average error acrued in the 10 window
+%each column corresponds error of a different metric (starttime, endtime, 3 forces, 3 moments, 1 RPM)
+%each row is a different 10s window
+%each page is a different test#. 1-7,15,16
+%200000 measurements per 10s window. 0.00005s per measurement
+
+stanDevs=zeros(0); %same as avErrors, but for standard deviation.
+
+for i=1:length(tests) %loops through all the tests
+    startmeasurement=1; %measurment the window starts on
+    endmeasurement=win; %measurement the window ends on 
+    lm=-1; %incremented variable needed in assigning errorAv to avErrors
+    while endmeasurement<length(testData(:,1,1)) %loops through each 10s window.
+        lm=lm+1;
+        for j=19:24 %loops through all the columns corresponding to forces and moments
+            avErrors(lm+1,[1,2],i)=[(startmeasurement-1)*0.00005,(endmeasurement-1)*0.00005]; %stores starttime & endtime
+            stanDevs(lm+1,[1,2],i)=avErrors(lm+1,[1,2],i);
+            errorsum=0; %sum of errors for any variable, eventually stored
+            for k=startmeasurement:endmeasurement %loops through all components of the column in the window
+                errorsum=errorsum+abs(testData(k,j,i) - FsMsRPMs(i,(j-17)));% adds error of component to errorsum
+            end
+            errorAv=errorsum/win; %average error for window
+            avErrors(startmeasurement-(lm*((win*(1-overlap))-1)),j-16,i)=errorAv;  %stores average error for window
+            stanDevs(startmeasurement-(lm*((win*(1-overlap))-1)),j-16,i)=std( testData(startmeasurement:endmeasurement,j,i) ); %calculates and stores standard deviation
+        end
+        
+        [~,measurementsBetweenInWindow]=getRPM(testData(startmeasurement:endmeasurement,:,i)); %passes getRPM function a slice of the matrix corresponding to the desired 10s window
+        %note that first index in measurementsBetweenInWindow will not be
+        %consistent with the others, since the rotor can start between
+        %blades. So start from 2nd index in analysis.
+        RPMsInWindow=(measurementsBetweenInWindow*0.00005/60).^-1; %converts to RPMs for each revolution in 10s window
+        RPMErrorSum=0; % sum of error in RPMs
+        for n=2:length(measurementsBetweenInWindow)
+            RPMErrorSum=RPMErrorSum+abs(RPMsInWindow(n)-FsMsRPMs(i,8));%sums up error between RPMs in window and average RPM of entire test
+        end
+        AvRPMError=RPMErrorSum/(length(RPMsInWindow)-1); %Average error in RPMs
+        avErrors(startmeasurement-(lm*((win*(1-overlap))-1)),9,i)=AvRPMError; %stores average error in RPMs
+        stanDevs(startmeasurement-(lm*((win*(1-overlap))-1)),9,i)=std( RPMsInWindow(2:length(RPMsInWindow)) ); %calculates and stores standard deviation of RPMs
+
+        startmeasurement=startmeasurement+(win*(1-overlap));%moves the start and end to next window
+        endmeasurement=endmeasurement+(win*(1-overlap));
+    end
+end
+
+
+
+%DETERMINING WHAT INTERVALS TO USE
+%===============================================================
+metricWeights=[0,0,1,0,0,1,1]; %Fx, Fy, Fz, Mx, My, Mz, RPM
+%Currently weighted so that Fz, Mz, RPM matter equally in deciding best
+%window, nothing else matters.
+%[percentAvErrors, idealPercErrorWindows, summedPercentageErrors]=toPercent(avErrors, metricWeights, FsMsRPMs, win);
+[idealErrorWindows, summedErrors, errorWindowsSorted]=determineWindow(avErrors, metricWeights);
+[idealStanDevWindows, summedStanDevs, stanDevWindowsSorted]=determineWindow(stanDevs, metricWeights);
+
+%IdealWindows=array2table( [testnums',idealPercErrorWindows,idealErrorWindows,idealStanDevWindows],'VariableNames',{'trial number tdhcs__','start (%err)','end (%err)','start (err)','end (err)','start (st dev)','end (st dev)'} )
+IdealWindows=array2table( [testnums',idealErrorWindows,idealStanDevWindows],'VariableNames',{'trial number tdhcs__','start (err)','end (err)','start (st dev)','end (st dev)'} )
+
+DIVINEwindows=[testnums',zeros(length(tests),2)];
+
+for i=1:length(tests) %loops through the tests
+    flag=true;
+    for j=1:length(errorWindowsSorted(:,1,1)) %loops through the windows. Note since it'll be working with the sorted arrays, its going from best to worst window, not chronological
+        %compares starttimes, to see if they are in the top j in both
+        %sorted lists (errorWindowsSorted and StanDevWindowsSorted)
+        temp=intersect(errorWindowsSorted(1:j,1,i) , stanDevWindowsSorted(1:j,1,i));
+        if (flag && (length(temp)==1) ) %if the one of jth best windows in the two lists are the same, thats the best window
+            DIVINEwindows(i,[2,3])=[temp, temp+winlen];
+            flag=false;
+        elseif (flag && (length(temp)==2)) %if two intersections are uncovered, need to choose one. 
+            temp1Score=find(errorWindowsSorted(:,1,i)==temp(1)) + find(stanDevWindowsSorted(:,1,i)==temp(1)); %score is sum of indices in sorted list
+            temp2Score=find(errorWindowsSorted(:,1,i)==temp(2)) + find(stanDevWindowsSorted(:,1,i)==temp(2)); %I just now realize I could have done this whole part this way... no turning back now!
+            DIVINEwindows(i,[2,3])=[temp(1),temp(1)+winlen];
+            if temp2Score>temp1Score
+                DIVINEwindows(i,[2,3])=[temp(2),temp(2)+winlen];
+            end
+            flag=false;
+        end
+    end
+end
+
+TDivineWindows=array2table(DIVINEwindows, 'VariableNames',{'test name tdhcs__','start time','end time'})
+
+%CONCLUSION: This method works pretty good for most tests. 
+%Test 3 it doesn't work on too too well, but I don't think there's a better
+%10s window to choose from. No overlap between ranking of error and st dev
+%for the top 4-5 intervals.
+%I also did a little work with percent error, but the intervals it said
+%were good were not the intervals that they other 2 methods said were good,
+%so i abandoned it.
+
+%TO DO: create sampling rate variable, then the 0.00005 is 1/sampleRate
+%Make a new version of this code using but using mean of the interval rather
+%than mean of the entire 120s in calculating avError.
