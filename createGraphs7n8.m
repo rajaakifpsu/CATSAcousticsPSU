@@ -1,3 +1,5 @@
+%COMMENT TEST
+
 function createGraphs7n8(FMRPM,fig)
 
 S=["No difference","Low difference","High difference"];
