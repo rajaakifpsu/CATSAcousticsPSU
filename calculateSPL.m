@@ -30,5 +30,6 @@ function SPLreturn=calculateSPL(freqs,pxx1mic,P_ref,interval)
     
     SPLreturn=10*log10(rsum/(P_ref^2)); 
     SPLreturn2=10*log10(rsum2/(P_ref^2)); 
-
+ 
+    %hello
 end
